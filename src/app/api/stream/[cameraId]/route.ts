@@ -11,9 +11,14 @@ export async function GET(
 ) {
   const resolved = "then" in ctx.params ? await (ctx.params as Promise<{ cameraId: string }>) : (ctx.params as { cameraId: string });
   const { cameraId } = resolved;
+  
+  console.log(`[STREAM] Starting stream for camera ${cameraId}`);
+  
   const sessId = req.cookies.get(SESSION_COOKIE)?.value;
   const sess = getSession(sessId);
+  
   if (!sess) {
+    console.error(`[STREAM] No session found`);
     return new Response(JSON.stringify({ error: "No session" }), { status: 401 });
   }
   const { baseUrl, username, password, allowSelfSigned } = sess;
@@ -31,33 +36,38 @@ export async function GET(
 
     await protect.getBootstrap();
     const cameras = protect.bootstrap?.cameras ?? [];
+    
     const camera = cameras.find((c: any) => c.id === cameraId || c.mac === cameraId || c.uuid === cameraId);
     if (!camera) {
       return new Response(JSON.stringify({ error: "Camera not found" }), { status: 404 });
     }
+    console.log(`[STREAM] Starting stream for camera: ${camera.name || camera.id}`);
 
-    // Use official Protect livestream helper (fMP4) per docs.
     const livestream = protect.createLivestream();
-    const started = await livestream.start(camera.id ?? cameraId, 0, { useStream: true, requestId: `ui-${Date.now()}` });
+    const started = await livestream.start(camera.id ?? cameraId, 0, { requestId: `ui-${Date.now()}` });
     if (!started) {
       return new Response(JSON.stringify({ error: "Failed to start livestream" }), { status: 500 });
     }
 
     const init = await livestream.getInitSegment();
-    const nodeStream = livestream.stream as Readable | null;
-    if (!nodeStream) {
-      return new Response(JSON.stringify({ error: "No livestream stream available" }), { status: 500 });
-    }
+    const codec = livestream.codec;
+    console.log(`[STREAM] Ready - Codec: ${codec}`);
 
     const readable = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(init));
-        const onData = (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk));
-        const onEnd = () => controller.close();
-        const onError = () => controller.close();
-        nodeStream.on("data", onData);
-        nodeStream.on("end", onEnd);
-        nodeStream.on("error", onError);
+        
+        let segmentCount = 0;
+        const onSegment = (data: Buffer) => {
+          segmentCount++;
+          if (segmentCount % 30 === 1) { // Log every 30 segments (~1 second)
+            console.log(`[STREAM] Streaming... (${segmentCount} segments sent)`);
+          }
+          controller.enqueue(new Uint8Array(data));
+        };
+        
+        livestream.on("segment", onSegment);
+        livestream.on("close", () => controller.close());
       },
       cancel() {
         try { livestream.stop(); } catch {}
@@ -75,7 +85,7 @@ export async function GET(
       },
     });
   } catch (error: any) {
-    console.error(error);
+    console.error(`[STREAM] Error:`, error?.message);
     return new Response(JSON.stringify({ error: error?.message ?? "Stream error" }), { status: 500 });
   }
 }

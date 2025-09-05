@@ -29,47 +29,37 @@ export default function Home() {
 		fetch("/api/env")
 			.then((r) => r.json())
 			.then((env) => {
-				console.log("Loaded env:", env);
 				if (env.baseUrl || env.username) {
 					setConn(env);
 					// Auto-connect if we have base URL and credentials
 					if (env.baseUrl && env.username && env.password) {
-						console.log("Auto-connecting with env credentials...");
 						connectWithCredentials(env);
 					}
 				}
 			})
-			.catch((e) => console.error("Failed to load env:", e));
+			.catch(() => {}); // ignore errors
 	}, []);
 
 	const connectWithCredentials = async (credentials: Conn) => {
 		setError(null);
-		console.log("Connecting with credentials:", { ...credentials, password: "***" });
 		try {
 			const res = await fetch("/api/session", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(credentials),
 			});
-			console.log("Session response:", res.status, res.ok);
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
-				console.error("Session error:", body);
 				throw new Error(body?.error || `Failed to create session (${res.status})`);
 			}
 			const r = await fetch(`/api/cameras`, { cache: "no-store" });
-			console.log("Cameras response:", r.status, r.ok);
 			if (!r.ok) {
-				const errorBody = await r.json().catch(() => ({}));
-				console.error("Cameras error:", errorBody);
 				throw new Error(`Failed to fetch cameras (${r.status})`);
 			}
 			const data = await r.json();
-			console.log("Cameras data:", data);
 			setCameras(Array.isArray(data) ? data : []);
 			setConnected(true);
 		} catch (e: any) {
-			console.error("Connection failed:", e);
 			setConnected(false);
 			setError(String(e?.message || e));
 		}
@@ -79,10 +69,87 @@ export default function Home() {
 
 	useEffect(() => {
 		if (!selectedId || !videoRef.current || !connected) return;
-		const src = `/api/stream/${selectedId}`;
 		const video = videoRef.current;
-		video.src = src;
-		video.play().catch(() => {});
+		
+		if (!window.MediaSource) {
+			console.error('[VIDEO] MediaSource not supported');
+			return;
+		}
+		
+		const mediaSource = new MediaSource();
+		let sourceBuffer: SourceBuffer | null = null;
+		let initReceived = false;
+		
+		const cleanup = () => {
+			try {
+				if (sourceBuffer && !sourceBuffer.updating) {
+					mediaSource.removeSourceBuffer(sourceBuffer);
+				}
+				if (mediaSource.readyState === 'open') {
+					mediaSource.endOfStream();
+				}
+			} catch (e) {
+				console.log('[VIDEO] Cleanup error (normal):', e);
+			}
+		};
+		
+		mediaSource.addEventListener('sourceopen', async () => {
+			try {
+				// Get codec info first
+				const codecResponse = await fetch(`/api/stream/${selectedId}/codec`);
+				if (!codecResponse.ok) throw new Error(`Codec fetch failed: ${codecResponse.status}`);
+				const { codec } = await codecResponse.json();
+				const mimeType = `video/mp4; codecs="${codec}"`;
+				
+				// Create SourceBuffer with correct codec
+				sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+				sourceBuffer.addEventListener('error', (e) => console.error('[VIDEO] SourceBuffer error:', e));
+				
+				// Now start the stream
+				const response = await fetch(`/api/stream/${selectedId}`);
+				if (!response.ok) throw new Error(`Stream failed: ${response.status}`);
+				if (!response.body) throw new Error('No response body');
+				
+				const reader = response.body.getReader();
+				
+				const processChunks = async () => {
+					try {
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							
+							if (!sourceBuffer.updating) {
+								sourceBuffer.appendBuffer(value);
+								if (!initReceived) {
+									initReceived = true;
+								}
+							}
+							
+							// Wait for buffer to finish updating
+							await new Promise(resolve => {
+								if (!sourceBuffer!.updating) {
+									resolve(void 0);
+								} else {
+									sourceBuffer!.addEventListener('updateend', resolve, { once: true });
+								}
+							});
+						}
+					} catch (e) {
+						console.error('[VIDEO] Stream processing error:', e);
+					}
+				};
+				
+				processChunks();
+				
+			} catch (e) {
+				console.error('[VIDEO] Stream setup error:', e);
+			}
+		});
+		
+		video.src = URL.createObjectURL(mediaSource);
+		video.play().catch(e => console.error('[VIDEO] Play failed:', e));
+		
+		return cleanup;
 	}, [selectedId, connected]);
 
 	return (
