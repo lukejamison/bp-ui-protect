@@ -1,10 +1,27 @@
-import { NextResponse } from "next/server";
-import { getProtectClient } from "@/lib/protect";
+import { NextRequest, NextResponse } from "next/server";
+import { ProtectApi } from "unifi-protect";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const client = getProtectClient();
-    const cameras = await client.getCameras();
+    const { searchParams } = new URL(req.url);
+    const baseUrl = searchParams.get("baseUrl");
+    const accessKey = searchParams.get("accessKey");
+    const username = searchParams.get("username");
+    const password = searchParams.get("password");
+    const allowSelfSigned = searchParams.get("allowSelfSigned") === "true";
+
+    const protect = new ProtectApi({ rejectUnauthorized: !allowSelfSigned });
+    if (!baseUrl) throw new Error("Missing baseUrl");
+    if (accessKey && accessKey.length > 0) {
+      protect.setAccessKey(accessKey);
+    } else if (username && password) {
+      await protect.login(baseUrl.replace(/^https?:\/\//, ""), username, password);
+    } else {
+      throw new Error("Provide accessKey or username/password");
+    }
+
+    await protect.getBootstrap();
+    const cameras = protect.bootstrap?.cameras ?? [];
     const simplified = cameras.map((c: any) => ({
       id: c.id || c.mac || c.uuid,
       name: c.name || c.displayName || c.type || "Camera",

@@ -1,20 +1,35 @@
 import { NextRequest } from "next/server";
 import { spawn } from "child_process";
 import Mp4Frag from "mp4frag";
-import { getProtectClient } from "@/lib/protect";
+import { ProtectApi } from "unifi-protect";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { cameraId: string } }
 ) {
   const { cameraId } = params;
-  const protect = getProtectClient();
+  const { searchParams } = new URL(req.url);
+  const baseUrl = searchParams.get("baseUrl");
+  const accessKey = searchParams.get("accessKey");
+  const username = searchParams.get("username");
+  const password = searchParams.get("password");
+  const allowSelfSigned = searchParams.get("allowSelfSigned") === "true";
+  const protect = new ProtectApi({ rejectUnauthorized: !allowSelfSigned });
 
   try {
-    const bootstrap = await protect.getBootstrap();
-    const cameras = bootstrap?.cameras ?? bootstrap?.nvr?.cameras ?? [];
+    if (!baseUrl) throw new Error("Missing baseUrl");
+    if (accessKey && accessKey.length > 0) {
+      protect.setAccessKey(accessKey);
+    } else if (username && password) {
+      await protect.login(baseUrl.replace(/^https?:\/\//, ""), username, password);
+    } else {
+      throw new Error("Provide accessKey or username/password");
+    }
+
+    await protect.getBootstrap();
+    const cameras = protect.bootstrap?.cameras ?? [];
     const camera = cameras.find((c: any) => c.id === cameraId || c.mac === cameraId || c.uuid === cameraId);
     if (!camera) {
       return new Response(JSON.stringify({ error: "Camera not found" }), { status: 404 });
