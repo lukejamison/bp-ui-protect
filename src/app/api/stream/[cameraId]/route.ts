@@ -55,22 +55,59 @@ export async function GET(
 
     const readable = new ReadableStream<Uint8Array>({
       start(controller) {
+        let isClosed = false;
+        
+        const safeClose = () => {
+          if (!isClosed) {
+            isClosed = true;
+            try {
+              controller.close();
+            } catch (e) {
+              // Controller already closed
+            }
+          }
+        };
+        
         controller.enqueue(new Uint8Array(init));
         
         let segmentCount = 0;
         const onSegment = (data: Buffer) => {
+          if (isClosed) return;
+          
           segmentCount++;
           if (segmentCount % 30 === 1) { // Log every 30 segments (~1 second)
             console.log(`[STREAM] Streaming... (${segmentCount} segments sent)`);
           }
-          controller.enqueue(new Uint8Array(data));
+          
+          try {
+            controller.enqueue(new Uint8Array(data));
+          } catch (e) {
+            console.log(`[STREAM] Stream ended for camera ${cameraId}`);
+            safeClose();
+          }
+        };
+        
+        const onClose = () => {
+          console.log(`[STREAM] Livestream closed for camera ${cameraId}`);
+          safeClose();
+        };
+        
+        const onError = (error: any) => {
+          console.error(`[STREAM] Livestream error for camera ${cameraId}:`, error?.message);
+          safeClose();
         };
         
         livestream.on("segment", onSegment);
-        livestream.on("close", () => controller.close());
+        livestream.on("close", onClose);
+        livestream.on("error", onError);
       },
       cancel() {
-        try { livestream.stop(); } catch {}
+        console.log(`[STREAM] Stream cancelled for camera ${cameraId}`);
+        try { 
+          livestream.stop(); 
+        } catch (e) {
+          console.log(`[STREAM] Error stopping livestream:`, e);
+        }
       },
     });
 

@@ -62,18 +62,34 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 
 		mediaSource.addEventListener('sourceopen', async () => {
 			try {
-				// Get codec info first
-				const codecResponse = await fetch(`/api/stream/${cameraId}/codec`);
+				// Get codec info first with timeout
+				const codecController = new AbortController();
+				const codecTimeout = setTimeout(() => codecController.abort(), 15000); // 15 second timeout
+				
+				const codecResponse = await fetch(`/api/stream/${cameraId}/codec`, {
+					signal: codecController.signal
+				});
+				clearTimeout(codecTimeout);
+				
 				if (!codecResponse.ok) throw new Error(`Codec fetch failed: ${codecResponse.status}`);
 				const { codec } = await codecResponse.json();
 				const mimeType = `video/mp4; codecs="${codec}"`;
+
+				if (isCancelled) return;
 
 				// Create SourceBuffer with correct codec
 				sourceBuffer = mediaSource.addSourceBuffer(mimeType);
 				sourceBuffer.addEventListener('error', (e) => console.error('[VIDEO] SourceBuffer error:', e));
 
-				// Now start the stream
-				const response = await fetch(`/api/stream/${cameraId}`);
+				// Now start the stream with timeout
+				const streamController = new AbortController();
+				const streamTimeout = setTimeout(() => streamController.abort(), 20000); // 20 second timeout
+				
+				const response = await fetch(`/api/stream/${cameraId}`, {
+					signal: streamController.signal
+				});
+				clearTimeout(streamTimeout);
+				
 				if (!response.ok) throw new Error(`Stream failed: ${response.status}`);
 				if (!response.body) throw new Error('No response body');
 
@@ -410,8 +426,8 @@ export default function Home() {
 							<div className="grid grid-cols-2 gap-4">
 								{Array.from(selectedCameras).slice(0, 4).map((cameraId, index) => {
 									const camera = cameras.find(c => c.id === cameraId);
-									// Stagger delays: 0ms, 1000ms, 2000ms, 3000ms
-									const delay = index * 1000;
+									// Stagger delays: 0ms, 2000ms, 4000ms, 6000ms (increased to reduce load)
+									const delay = index * 2000;
 									return (
 										<div key={cameraId} className="aspect-video overflow-hidden rounded-lg border border-neutral-200 bg-black shadow-sm dark:border-neutral-800">
 											<div className="relative size-full">
@@ -438,7 +454,7 @@ export default function Home() {
 						)}
 					</section>
 				</section>
-			</div>
+    </div>
 		</main>
   );
 }
