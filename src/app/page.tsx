@@ -24,28 +24,58 @@ export default function Home() {
 	const [error, setError] = useState<string | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 
-	const connect = async () => {
+	// Load env defaults and auto-connect
+	useEffect(() => {
+		fetch("/api/env")
+			.then((r) => r.json())
+			.then((env) => {
+				console.log("Loaded env:", env);
+				if (env.baseUrl || env.username) {
+					setConn(env);
+					// Auto-connect if we have base URL and credentials
+					if (env.baseUrl && env.username && env.password) {
+						console.log("Auto-connecting with env credentials...");
+						connectWithCredentials(env);
+					}
+				}
+			})
+			.catch((e) => console.error("Failed to load env:", e));
+	}, []);
+
+	const connectWithCredentials = async (credentials: Conn) => {
 		setError(null);
+		console.log("Connecting with credentials:", { ...credentials, password: "***" });
 		try {
 			const res = await fetch("/api/session", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(conn),
+				body: JSON.stringify(credentials),
 			});
+			console.log("Session response:", res.status, res.ok);
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
+				console.error("Session error:", body);
 				throw new Error(body?.error || `Failed to create session (${res.status})`);
 			}
 			const r = await fetch(`/api/cameras`, { cache: "no-store" });
-			if (!r.ok) throw new Error(`Failed to fetch cameras (${r.status})`);
+			console.log("Cameras response:", r.status, r.ok);
+			if (!r.ok) {
+				const errorBody = await r.json().catch(() => ({}));
+				console.error("Cameras error:", errorBody);
+				throw new Error(`Failed to fetch cameras (${r.status})`);
+			}
 			const data = await r.json();
+			console.log("Cameras data:", data);
 			setCameras(Array.isArray(data) ? data : []);
 			setConnected(true);
 		} catch (e: any) {
+			console.error("Connection failed:", e);
 			setConnected(false);
 			setError(String(e?.message || e));
 		}
 	};
+
+	const connect = () => connectWithCredentials(conn);
 
 	useEffect(() => {
 		if (!selectedId || !videoRef.current || !connected) return;

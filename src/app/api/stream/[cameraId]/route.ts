@@ -1,16 +1,16 @@
 import { NextRequest } from "next/server";
-import { spawn } from "child_process";
-import Mp4Frag from "mp4frag";
 import { ProtectApi } from "unifi-protect";
 import { SESSION_COOKIE, getSession } from "@/lib/session";
+import { Readable } from "stream";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { cameraId: string } }
+  ctx: { params: { cameraId: string } } | { params: Promise<{ cameraId: string }> }
 ) {
-  const { cameraId } = params;
+  const resolved = "then" in ctx.params ? await (ctx.params as Promise<{ cameraId: string }>) : (ctx.params as { cameraId: string });
+  const { cameraId } = resolved;
   const sessId = req.cookies.get(SESSION_COOKIE)?.value;
   const sess = getSession(sessId);
   if (!sess) {
@@ -36,57 +36,31 @@ export async function GET(
       return new Response(JSON.stringify({ error: "Camera not found" }), { status: 404 });
     }
 
-    // Determine RTSP URL
-    const rtspBase = process.env.PROTECT_RTSP_BASE;
-    let rtspUrl: string | null = null;
-    const rtspEntries = camera?.rtspUris || camera?.channels || [];
-    if (Array.isArray(rtspEntries)) {
-      const firstRtsp = rtspEntries.find((e: any) => typeof e === "string" && e.startsWith("rtsp"));
-      if (firstRtsp) rtspUrl = firstRtsp;
-      const firstChannel = rtspEntries.find((ch: any) => typeof ch?.rtspAlias === "string");
-      if (!rtspUrl && firstChannel && rtspBase) {
-        rtspUrl = `${rtspBase}/${firstChannel.rtspAlias}`;
-      }
+    // Use official Protect livestream helper (fMP4) per docs.
+    const livestream = protect.createLivestream();
+    const started = await livestream.start(camera.id ?? cameraId, 0, { useStream: true, requestId: `ui-${Date.now()}` });
+    if (!started) {
+      return new Response(JSON.stringify({ error: "Failed to start livestream" }), { status: 500 });
     }
 
-    if (!rtspUrl) {
-      return new Response(JSON.stringify({ error: "No RTSP URL found for camera. Enable RTSP in Protect." }), { status: 400 });
+    const init = await livestream.getInitSegment();
+    const nodeStream = livestream.stream as Readable | null;
+    if (!nodeStream) {
+      return new Response(JSON.stringify({ error: "No livestream stream available" }), { status: 500 });
     }
-
-    // Transmux RTSP (H264) to fMP4 for MSE via mp4frag
-    const mp4frag = new Mp4Frag();
-    const ffmpegArgs = [
-      "-rtsp_transport", "tcp",
-      "-i", rtspUrl,
-      "-an",
-      "-c:v", "copy",
-      "-f", "mp4",
-      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      "-reset_timestamps", "1",
-      "pipe:1",
-    ];
-
-    const ff = spawn("ffmpeg", ffmpegArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    ff.stdout?.pipe(mp4frag);
-
-    // Consume stderr to avoid buffer backpressure
-    ff.stderr?.on("data", () => {});
 
     const readable = new ReadableStream<Uint8Array>({
       start(controller) {
-        function onInit(data: Buffer) {
-          controller.enqueue(new Uint8Array(data));
-        }
-        function onSegment(data: Buffer) {
-          controller.enqueue(new Uint8Array(data));
-        }
-        mp4frag.on("initialized", onInit);
-        mp4frag.on("segment", onSegment);
-        ff.on("close", () => controller.close());
-        ff.on("error", () => controller.close());
+        controller.enqueue(new Uint8Array(init));
+        const onData = (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk));
+        const onEnd = () => controller.close();
+        const onError = () => controller.close();
+        nodeStream.on("data", onData);
+        nodeStream.on("end", onEnd);
+        nodeStream.on("error", onError);
       },
       cancel() {
-        ff.kill("SIGINT");
+        try { livestream.stop(); } catch {}
       },
     });
 
@@ -101,6 +75,7 @@ export async function GET(
       },
     });
   } catch (error: any) {
+    console.error(error);
     return new Response(JSON.stringify({ error: error?.message ?? "Stream error" }), { status: 500 });
   }
 }
