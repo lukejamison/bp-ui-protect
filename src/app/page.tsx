@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Camera = {
 	id: string;
@@ -24,18 +24,20 @@ export default function Home() {
 	const [error, setError] = useState<string | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 
-	const qs = new URLSearchParams();
-	if (conn.baseUrl) qs.set("baseUrl", conn.baseUrl);
-	if (conn.allowSelfSigned) qs.set("allowSelfSigned", String(conn.allowSelfSigned));
-	if (conn.accessKey) qs.set("accessKey", conn.accessKey);
-	if (conn.username) qs.set("username", conn.username);
-	if (conn.password) qs.set("password", conn.password);
-
 	const connect = async () => {
 		setError(null);
 		try {
-			const r = await fetch(`/api/cameras?${qs.toString()}`);
-			if (!r.ok) throw new Error(`Failed: ${r.status}`);
+			const res = await fetch("/api/session", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(conn),
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				throw new Error(body?.error || `Failed to create session (${res.status})`);
+			}
+			const r = await fetch(`/api/cameras`, { cache: "no-store" });
+			if (!r.ok) throw new Error(`Failed to fetch cameras (${r.status})`);
 			const data = await r.json();
 			setCameras(Array.isArray(data) ? data : []);
 			setConnected(true);
@@ -47,11 +49,10 @@ export default function Home() {
 
 	useEffect(() => {
 		if (!selectedId || !videoRef.current || !connected) return;
-		const src = `/api/stream/${selectedId}?${qs.toString()}`;
+		const src = `/api/stream/${selectedId}`;
 		const video = videoRef.current;
 		video.src = src;
 		video.play().catch(() => {});
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selectedId, connected]);
 
 	return (
@@ -66,7 +67,7 @@ export default function Home() {
 					<div className="grid grid-cols-1 gap-3 md:grid-cols-6">
 						<input
 							className="md:col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
-							placeholder="https://unifi-os.local"
+							placeholder="https://unifi-os.local or 10.1.1.x"
 							value={conn.baseUrl}
 							onChange={(e) => setConn((c) => ({ ...c, baseUrl: e.target.value }))}
 						/>

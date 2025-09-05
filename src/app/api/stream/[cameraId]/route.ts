@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { spawn } from "child_process";
 import Mp4Frag from "mp4frag";
 import { ProtectApi } from "unifi-protect";
+import { SESSION_COOKIE, getSession } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -10,22 +11,22 @@ export async function GET(
   { params }: { params: { cameraId: string } }
 ) {
   const { cameraId } = params;
-  const { searchParams } = new URL(req.url);
-  const baseUrl = searchParams.get("baseUrl");
-  const accessKey = searchParams.get("accessKey");
-  const username = searchParams.get("username");
-  const password = searchParams.get("password");
-  const allowSelfSigned = searchParams.get("allowSelfSigned") === "true";
-  const protect = new ProtectApi({ rejectUnauthorized: !allowSelfSigned });
+  const sessId = req.cookies.get(SESSION_COOKIE)?.value;
+  const sess = getSession(sessId);
+  if (!sess) {
+    return new Response(JSON.stringify({ error: "No session" }), { status: 401 });
+  }
+  const { baseUrl, username, password, allowSelfSigned } = sess;
+  if (allowSelfSigned) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+  const protect = new ProtectApi();
 
   try {
-    if (!baseUrl) throw new Error("Missing baseUrl");
-    if (accessKey && accessKey.length > 0) {
-      protect.setAccessKey(accessKey);
-    } else if (username && password) {
-      await protect.login(baseUrl.replace(/^https?:\/\//, ""), username, password);
+    if (username && password) {
+      await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
     } else {
-      throw new Error("Provide accessKey or username/password");
+      throw new Error("Invalid session");
     }
 
     await protect.getBootstrap();
