@@ -6,10 +6,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
-  ctx: { params: { cameraId: string } } | { params: Promise<{ cameraId: string }> }
+  ctx: { params: Promise<{ cameraId: string }> }
 ) {
-  const resolved = "then" in ctx.params ? await (ctx.params as Promise<{ cameraId: string }>) : (ctx.params as { cameraId: string });
-  const { cameraId } = resolved;
+  const { cameraId } = await ctx.params;
   
   const sessId = req.cookies.get(SESSION_COOKIE)?.value;
   const sess = getSession(sessId);

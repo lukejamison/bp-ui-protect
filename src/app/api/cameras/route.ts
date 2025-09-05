@@ -13,15 +13,18 @@ export async function GET(req: NextRequest) {
 
     const protect = await protectConnectionManager.getConnection(baseUrl, username, password, allowSelfSigned || false);
     const cameras = protect.bootstrap?.cameras ?? [];
-    const simplified = cameras.map((c: any) => ({
-      id: c.id || c.mac || c.uuid,
-      name: c.name || c.displayName || c.type || "Camera",
-      isOnline: c.isConnected ?? c.state === "CONNECTED",
-    }));
+    const simplified = cameras.map((c: unknown) => {
+      const camera = c as Record<string, unknown>;
+      return {
+        id: (camera.id || camera.mac || camera.uuid) as string,
+        name: (camera.name || camera.displayName || camera.type || "Camera") as string,
+        isOnline: (camera.isConnected ?? camera.state === "CONNECTED") as boolean,
+      };
+    });
     return NextResponse.json(simplified);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { error: error?.message ?? "Failed to fetch cameras" },
+      { error: (error as Error)?.message ?? "Failed to fetch cameras" },
       { status: 500 }
     );
   }
