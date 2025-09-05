@@ -3,46 +3,62 @@
 import { useEffect, useRef, useState } from "react";
 
 // Reusable video player component for MSE streaming
-function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className?: string }) {
+function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string; className?: string; delay?: number }) {
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const cleanupRef = useRef<(() => void) | null>(null);
+	const [isLoading, setIsLoading] = useState(true);
+	const [hasError, setHasError] = useState(false);
 
 	useEffect(() => {
 		if (!cameraId || !videoRef.current) return;
-		const video = videoRef.current;
-
-		// Clean up previous stream immediately
-		if (cleanupRef.current) {
-			cleanupRef.current();
-			cleanupRef.current = null;
-		}
-
-		if (!window.MediaSource) {
-			console.error('[VIDEO] MediaSource not supported');
-			return;
-		}
-
-		const mediaSource = new MediaSource();
-		let sourceBuffer: SourceBuffer | null = null;
-		let initReceived = false;
-		let isCancelled = false;
-
-		const cleanup = () => {
-			isCancelled = true;
-			try {
-				if (sourceBuffer && !sourceBuffer.updating) {
-					mediaSource.removeSourceBuffer(sourceBuffer);
-				}
-				if (mediaSource.readyState === 'open') {
-					mediaSource.endOfStream();
-				}
-				video.src = '';
-			} catch (e) {
-				// Normal cleanup errors
+		
+		// Reset states
+		setIsLoading(true);
+		setHasError(false);
+		
+		// Add delay for staggered loading
+		const startStream = async () => {
+			if (delay > 0) {
+				await new Promise(resolve => setTimeout(resolve, delay));
 			}
-		};
+			
+			const video = videoRef.current;
+			if (!video) return;
 
-		cleanupRef.current = cleanup;
+			// Clean up previous stream immediately
+			if (cleanupRef.current) {
+				cleanupRef.current();
+				cleanupRef.current = null;
+			}
+
+			if (!window.MediaSource) {
+				console.error('[VIDEO] MediaSource not supported');
+				setHasError(true);
+				setIsLoading(false);
+				return;
+			}
+
+			const mediaSource = new MediaSource();
+			let sourceBuffer: SourceBuffer | null = null;
+			let initReceived = false;
+			let isCancelled = false;
+
+			const cleanup = () => {
+				isCancelled = true;
+				try {
+					if (sourceBuffer && !sourceBuffer.updating) {
+						mediaSource.removeSourceBuffer(sourceBuffer);
+					}
+					if (mediaSource.readyState === 'open') {
+						mediaSource.endOfStream();
+					}
+					video.src = '';
+				} catch (e) {
+					// Normal cleanup errors
+				}
+			};
+
+			cleanupRef.current = cleanup;
 
 		mediaSource.addEventListener('sourceopen', async () => {
 			try {
@@ -73,6 +89,7 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 								sourceBuffer.appendBuffer(value);
 								if (!initReceived) {
 									initReceived = true;
+									setIsLoading(false); // Hide loading spinner on first chunk
 								}
 							}
 
@@ -87,17 +104,21 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 								});
 							}
 						}
-					} catch (e) {
-						if (!isCancelled) {
-							console.error('[VIDEO] Stream processing error:', e);
-						}
+									} catch (e) {
+					if (!isCancelled) {
+						console.error('[VIDEO] Stream processing error:', e);
+						setHasError(true);
+						setIsLoading(false);
 					}
+				}
 				};
 
 				processChunks();
 
 			} catch (e) {
 				console.error('[VIDEO] Stream setup error:', e);
+				setHasError(true);
+				setIsLoading(false);
 			}
 		});
 
@@ -105,9 +126,37 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 		video.play().catch(e => console.error('[VIDEO] Play failed:', e));
 
 		return cleanup;
-	}, [cameraId]);
+		};
+		
+		startStream();
+	}, [cameraId, delay]);
 
-	return <video ref={videoRef} controls autoPlay playsInline muted className={className} />;
+	return (
+		<div className={`relative ${className}`}>
+			<video 
+				ref={videoRef} 
+				controls 
+				autoPlay 
+				playsInline 
+				muted 
+				className="w-full h-full"
+				style={{ display: isLoading || hasError ? 'none' : 'block' }}
+			/>
+			{isLoading && (
+				<div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+					<div className="flex flex-col items-center space-y-2">
+						<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+						<div className="text-white text-sm">Loading stream...</div>
+					</div>
+				</div>
+			)}
+			{hasError && (
+				<div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+					<div className="text-red-400 text-sm">Failed to load stream</div>
+				</div>
+			)}
+		</div>
+	);
 }
 
 type Camera = {
@@ -202,7 +251,7 @@ export default function Home() {
 	};
 
 
-	return (
+  return (
 		<main className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
 			<div className="mx-auto max-w-7xl p-6">
 				<header className="mb-6 flex items-center justify-between">
@@ -277,7 +326,7 @@ export default function Home() {
 						</button>
 					</div>
 					{error && <div className="mt-2 text-sm text-red-600">{error}</div>}
-				</div>
+        </div>
 
 				<section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
 					<aside className="lg:col-span-3">
@@ -359,13 +408,15 @@ export default function Home() {
 							</>
 						) : (
 							<div className="grid grid-cols-2 gap-4">
-								{Array.from(selectedCameras).slice(0, 4).map((cameraId) => {
+								{Array.from(selectedCameras).slice(0, 4).map((cameraId, index) => {
 									const camera = cameras.find(c => c.id === cameraId);
+									// Stagger delays: 0ms, 1000ms, 2000ms, 3000ms
+									const delay = index * 1000;
 									return (
 										<div key={cameraId} className="aspect-video overflow-hidden rounded-lg border border-neutral-200 bg-black shadow-sm dark:border-neutral-800">
 											<div className="relative size-full">
 												{connected ? (
-													<VideoPlayer cameraId={cameraId} className="size-full" />
+													<VideoPlayer cameraId={cameraId} className="size-full" delay={delay} />
 												) : (
 													<div className="flex size-full items-center justify-center text-neutral-500">
 														Connect to view
@@ -389,5 +440,5 @@ export default function Home() {
 				</section>
 			</div>
 		</main>
-	);
+  );
 }
