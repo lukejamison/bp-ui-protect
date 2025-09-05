@@ -5,10 +5,17 @@ import { useEffect, useRef, useState } from "react";
 // Reusable video player component for MSE streaming
 function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className?: string }) {
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const cleanupRef = useRef<(() => void) | null>(null);
 
 	useEffect(() => {
 		if (!cameraId || !videoRef.current) return;
 		const video = videoRef.current;
+
+		// Clean up previous stream immediately
+		if (cleanupRef.current) {
+			cleanupRef.current();
+			cleanupRef.current = null;
+		}
 
 		if (!window.MediaSource) {
 			console.error('[VIDEO] MediaSource not supported');
@@ -18,8 +25,10 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 		const mediaSource = new MediaSource();
 		let sourceBuffer: SourceBuffer | null = null;
 		let initReceived = false;
+		let isCancelled = false;
 
 		const cleanup = () => {
+			isCancelled = true;
 			try {
 				if (sourceBuffer && !sourceBuffer.updating) {
 					mediaSource.removeSourceBuffer(sourceBuffer);
@@ -27,10 +36,13 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 				if (mediaSource.readyState === 'open') {
 					mediaSource.endOfStream();
 				}
+				video.src = '';
 			} catch (e) {
 				// Normal cleanup errors
 			}
 		};
+
+		cleanupRef.current = cleanup;
 
 		mediaSource.addEventListener('sourceopen', async () => {
 			try {
@@ -53,11 +65,11 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 
 				const processChunks = async () => {
 					try {
-						while (true) {
+						while (!isCancelled) {
 							const { done, value } = await reader.read();
-							if (done) break;
+							if (done || isCancelled) break;
 
-							if (!sourceBuffer.updating) {
+							if (sourceBuffer && !sourceBuffer.updating && !isCancelled) {
 								sourceBuffer.appendBuffer(value);
 								if (!initReceived) {
 									initReceived = true;
@@ -65,16 +77,20 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 							}
 
 							// Wait for buffer to finish updating
-							await new Promise(resolve => {
-								if (!sourceBuffer!.updating) {
-									resolve(void 0);
-								} else {
-									sourceBuffer!.addEventListener('updateend', resolve, { once: true });
-								}
-							});
+							if (sourceBuffer && !isCancelled) {
+								await new Promise(resolve => {
+									if (!sourceBuffer!.updating) {
+										resolve(void 0);
+									} else {
+										sourceBuffer!.addEventListener('updateend', resolve, { once: true });
+									}
+								});
+							}
 						}
 					} catch (e) {
-						console.error('[VIDEO] Stream processing error:', e);
+						if (!isCancelled) {
+							console.error('[VIDEO] Stream processing error:', e);
+						}
 					}
 				};
 
@@ -91,7 +107,7 @@ function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className
 		return cleanup;
 	}, [cameraId]);
 
-	return <video ref={videoRef} controls autoPlay playsInline className={className} />;
+	return <video ref={videoRef} controls autoPlay playsInline muted className={className} />;
 }
 
 type Camera = {
@@ -114,7 +130,7 @@ export default function Home() {
 	const [cameras, setCameras] = useState<Camera[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [selectedCameras, setSelectedCameras] = useState<Set<string>>(new Set());
-	const [viewMode, setViewMode] = useState<"single" | "grid">("single");
+	const [viewMode, setViewMode] = useState<"single" | "grid">("grid");
 	const [error, setError] = useState<string | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -151,7 +167,15 @@ export default function Home() {
 				throw new Error(`Failed to fetch cameras (${r.status})`);
 			}
 			const data = await r.json();
-			setCameras(Array.isArray(data) ? data : []);
+			const cameraList = Array.isArray(data) ? data : [];
+			setCameras(cameraList);
+			
+			// Auto-select first 3 cameras for grid view
+			if (cameraList.length > 0) {
+				const firstThree = new Set(cameraList.slice(0, 3).map(c => c.id));
+				setSelectedCameras(firstThree);
+			}
+			
 			setConnected(true);
 		} catch (e: any) {
 			setConnected(false);
