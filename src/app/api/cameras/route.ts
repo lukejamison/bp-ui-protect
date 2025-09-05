@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ProtectApi } from "unifi-protect";
 import { SESSION_COOKIE, getSession } from "@/lib/session";
+import { protectConnectionManager } from "@/lib/protect-connection";
 
 export async function GET(req: NextRequest) {
   try {
@@ -9,18 +9,9 @@ export async function GET(req: NextRequest) {
     if (!sess) throw new Error("No session");
     const { baseUrl, username, password, allowSelfSigned } = sess;
     if (!baseUrl) throw new Error("Invalid session: baseUrl");
-    if (allowSelfSigned) {
-      // Allow self-signed TLS for this request cycle
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    }
-    const protect = new ProtectApi();
-    if (username && password) {
-      await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
-    } else {
-      throw new Error("Invalid session: missing credentials");
-    }
+    if (!username || !password) throw new Error("Invalid session: missing credentials");
 
-    await protect.getBootstrap();
+    const protect = await protectConnectionManager.getConnection(baseUrl, username, password, allowSelfSigned || false);
     const cameras = protect.bootstrap?.cameras ?? [];
     const simplified = cameras.map((c: any) => ({
       id: c.id || c.mac || c.uuid,
