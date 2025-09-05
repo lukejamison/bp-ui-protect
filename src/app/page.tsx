@@ -296,7 +296,14 @@ export default function Home() {
 		<main className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
 			<div className="mx-auto max-w-7xl p-6">
 				<header className="mb-6 flex items-center justify-between">
-					<h1 className="text-xl font-semibold tracking-tight">UniFi Protect Live</h1>
+					<div className="flex items-center gap-3">
+						<img 
+							src="/favicon.png" 
+							alt="Bushards Logo" 
+							className="h-8 w-8"
+						/>
+						<h1 className="text-xl font-semibold tracking-tight">View Cameras</h1>
+					</div>
 					<div className="flex items-center gap-4">
 						<div className="flex rounded-lg border border-neutral-200 dark:border-neutral-800">
 							<button
@@ -320,7 +327,7 @@ export default function Home() {
 								Grid (4)
 							</button>
 						</div>
-						<div className="text-sm opacity-70">Business camera viewer</div>
+						<div className="text-sm opacity-70">Bushards POS Camera System</div>
 					</div>
 				</header>
 
