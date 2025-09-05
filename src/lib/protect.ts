@@ -1,79 +1,62 @@
-import axios, { AxiosInstance } from "axios";
-
-type ProtectAuth =
-  | { type: "accessKey"; accessKey: string }
-  | { type: "credentials"; username: string; password: string };
+import { ProtectApi } from "unifi-protect";
 
 export class ProtectClient {
-  private http: AxiosInstance;
-  private baseUrl: string;
-  private allowSelfSigned: boolean;
-  private auth: ProtectAuth | null;
+	private protect: ProtectApi;
+	private baseUrl: string;
+	private allowSelfSigned: boolean;
 
-  constructor() {
-    const baseUrl = process.env.PROTECT_BASE_URL;
-    const accessKey = process.env.PROTECT_ACCESS_KEY;
-    const username = process.env.PROTECT_USERNAME;
-    const password = process.env.PROTECT_PASSWORD;
-    const allowSelfSigned = String(process.env.PROTECT_ALLOW_SELF_SIGNED) === "true";
+	constructor() {
+		const baseUrl = process.env.PROTECT_BASE_URL;
+		const accessKey = process.env.PROTECT_ACCESS_KEY;
+		const username = process.env.PROTECT_USERNAME;
+		const password = process.env.PROTECT_PASSWORD;
+		const allowSelfSigned = String(process.env.PROTECT_ALLOW_SELF_SIGNED) === "true";
 
-    if (!baseUrl) {
-      throw new Error("Missing PROTECT_BASE_URL in environment");
-    }
+		if (!baseUrl) {
+			throw new Error("Missing PROTECT_BASE_URL in environment");
+		}
 
-    this.baseUrl = baseUrl.replace(/\/$/, "");
-    this.allowSelfSigned = allowSelfSigned;
-    this.auth = null;
+		this.baseUrl = baseUrl.replace(/\/$/, "");
+		this.allowSelfSigned = allowSelfSigned;
+		this.protect = new ProtectApi({
+			// disable TLS verify if requested
+			rejectUnauthorized: !this.allowSelfSigned,
+		});
 
-    if (accessKey) {
-      this.auth = { type: "accessKey", accessKey };
-    } else if (username && password) {
-      this.auth = { type: "credentials", username, password };
-    }
+		// Configure auth
+		if (accessKey) {
+			this.protect.setAccessKey(accessKey);
+		} else if (username && password) {
+			// no-op here; will login() with credentials on demand
+		}
+	}
 
-    this.http = axios.create({
-      baseURL: this.baseUrl,
-      withCredentials: true,
-      // @ts-expect-error Node https agent options
-      httpsAgent: this.allowSelfSigned
-        ? new (require("https").Agent)({ rejectUnauthorized: false })
-        : undefined,
-      validateStatus: (s) => s >= 200 && s < 300,
-    });
-  }
+	private async ensureAuth(): Promise<void> {
+		// If access key present, nothing more needed
+		if (this.protect.accessKey) return;
 
-  async ensureAuth(): Promise<void> {
-    if (!this.auth) return; // unauthenticated endpoints might still work
+		const username = process.env.PROTECT_USERNAME;
+		const password = process.env.PROTECT_PASSWORD;
+		if (!username || !password) return;
 
-    if (this.auth.type === "accessKey") {
-      this.http.defaults.headers.common["Authorization"] = `Bearer ${this.auth.accessKey}`;
-      return;
-    }
+		await this.protect.login(this.baseUrl.replace(/^https?:\/\//, ""), username, password);
+	}
 
-    // Credentials: create a session
-    await this.http.post("/api/auth/login", {
-      username: this.auth.username,
-      password: this.auth.password,
-      rememberMe: true,
-    });
-  }
+	async getBootstrap() {
+		await this.ensureAuth();
+		await this.protect.getBootstrap();
+		return this.protect.bootstrap;
+	}
 
-  async getBootstrap() {
-    await this.ensureAuth();
-    const { data } = await this.http.get("/api/bootstrap");
-    return data;
-  }
-
-  async getCameras() {
-    const bootstrap = await this.getBootstrap();
-    // Newer bootstrap: bootstrap.cameras; legacy: bootstrap.nvr.cameras
-    const cameras = bootstrap?.cameras ?? bootstrap?.nvr?.cameras ?? [];
-    return cameras;
-  }
+	async getCameras() {
+		const bootstrap = await this.getBootstrap();
+		const cameras = bootstrap?.cameras ?? [];
+		return cameras;
+	}
 }
 
 export function getProtectClient(): ProtectClient {
-  return new ProtectClient();
+	return new ProtectClient();
 }
 
 
