@@ -43,20 +43,32 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 			let initReceived = false;
 			let isCancelled = false;
 
-			const cleanup = () => {
-				isCancelled = true;
-				try {
-					if (sourceBuffer && !sourceBuffer.updating) {
-						mediaSource.removeSourceBuffer(sourceBuffer);
+					const cleanup = () => {
+			isCancelled = true;
+			try {
+				// Wait a bit for any pending operations to finish
+				setTimeout(() => {
+					try {
+						if (sourceBuffer && !sourceBuffer.updating && mediaSource.readyState === 'open') {
+							mediaSource.removeSourceBuffer(sourceBuffer);
+						}
+						if (mediaSource.readyState === 'open') {
+							mediaSource.endOfStream();
+						}
+						// Only clear video source if it's safe to do so
+						if (video && video.readyState !== HTMLMediaElement.HAVE_NOTHING) {
+							video.pause();
+							video.removeAttribute('src');
+							video.load();
+						}
+					} catch (e) {
+						// Normal cleanup errors during rapid switching
 					}
-					if (mediaSource.readyState === 'open') {
-						mediaSource.endOfStream();
-					}
-					video.src = '';
-				} catch (e) {
-					// Normal cleanup errors
-				}
-			};
+				}, 100);
+			} catch (e) {
+				// Immediate cleanup errors
+			}
+		};
 
 			cleanupRef.current = cleanup;
 
@@ -120,10 +132,13 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 								});
 							}
 						}
-									} catch (e) {
+									} catch (e: any) {
 					if (!isCancelled) {
-						console.error('[VIDEO] Stream processing error:', e);
-						setHasError(true);
+						// Only log non-abort errors
+						if (e?.name !== 'AbortError') {
+							console.error('[VIDEO] Stream processing error:', e);
+							setHasError(true);
+						}
 						setIsLoading(false);
 					}
 				}
@@ -131,15 +146,25 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 
 				processChunks();
 
-			} catch (e) {
-				console.error('[VIDEO] Stream setup error:', e);
-				setHasError(true);
-				setIsLoading(false);
+			} catch (e: any) {
+				if (!isCancelled) {
+					// Only log non-abort errors
+					if (e?.name !== 'AbortError') {
+						console.error('[VIDEO] Stream setup error:', e);
+						setHasError(true);
+					}
+					setIsLoading(false);
+				}
 			}
 		});
 
 		video.src = URL.createObjectURL(mediaSource);
-		video.play().catch(e => console.error('[VIDEO] Play failed:', e));
+		video.play().catch((e: any) => {
+			// Only log non-abort errors
+			if (e?.name !== 'AbortError' && !isCancelled) {
+				console.error('[VIDEO] Play failed:', e);
+			}
+		});
 
 		return cleanup;
 		};
