@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { SESSION_COOKIE, getSession } from "@/lib/session";
 import { protectConnectionManager } from "@/lib/protect-connection";
-import { Readable } from "stream";
 
 export const dynamic = "force-dynamic";
 

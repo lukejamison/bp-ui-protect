@@ -1,10 +1,10 @@
-import { ProtectApi } from "unifi-protect";
+// Dynamic import to avoid bundling issues
 
 // Global connection manager to prevent multiple simultaneous logins
 class ProtectConnectionManager {
   private static instance: ProtectConnectionManager;
-  private connections = new Map<string, ProtectApi>();
-  private loginPromises = new Map<string, Promise<ProtectApi>>();
+  private connections = new Map<string, any>();
+  private loginPromises = new Map<string, Promise<any>>();
 
   static getInstance(): ProtectConnectionManager {
     if (!ProtectConnectionManager.instance) {
@@ -13,7 +13,7 @@ class ProtectConnectionManager {
     return ProtectConnectionManager.instance;
   }
 
-  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
+  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
     const key = `${baseUrl}:${username}`;
     
     // Return existing connection if available and still valid
@@ -44,11 +44,13 @@ class ProtectConnectionManager {
     }
   }
 
-  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
+  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
     if (allowSelfSigned) {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
     }
 
+    // Dynamic import to avoid bundling issues
+    const { ProtectApi } = await import('unifi-protect');
     const protect = new ProtectApi();
     await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
     await protect.getBootstrap();

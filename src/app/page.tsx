@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 
 // Reusable video player component for MSE streaming
 function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string; className?: string; delay?: number }) {
@@ -297,9 +298,11 @@ export default function Home() {
 			<div className="mx-auto max-w-7xl p-6">
 				<header className="mb-6 flex items-center justify-between">
 					<div className="flex items-center gap-3">
-						<img 
+						<Image 
 							src="/favicon.png" 
 							alt="Bushards Logo" 
+							width={32}
+							height={32}
 							className="h-8 w-8"
 						/>
 						<h1 className="text-xl font-semibold tracking-tight">View Cameras</h1>
