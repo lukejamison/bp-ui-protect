@@ -2,6 +2,98 @@
 
 import { useEffect, useRef, useState } from "react";
 
+// Reusable video player component for MSE streaming
+function VideoPlayer({ cameraId, className = "" }: { cameraId: string; className?: string }) {
+	const videoRef = useRef<HTMLVideoElement>(null);
+
+	useEffect(() => {
+		if (!cameraId || !videoRef.current) return;
+		const video = videoRef.current;
+
+		if (!window.MediaSource) {
+			console.error('[VIDEO] MediaSource not supported');
+			return;
+		}
+
+		const mediaSource = new MediaSource();
+		let sourceBuffer: SourceBuffer | null = null;
+		let initReceived = false;
+
+		const cleanup = () => {
+			try {
+				if (sourceBuffer && !sourceBuffer.updating) {
+					mediaSource.removeSourceBuffer(sourceBuffer);
+				}
+				if (mediaSource.readyState === 'open') {
+					mediaSource.endOfStream();
+				}
+			} catch (e) {
+				// Normal cleanup errors
+			}
+		};
+
+		mediaSource.addEventListener('sourceopen', async () => {
+			try {
+				// Get codec info first
+				const codecResponse = await fetch(`/api/stream/${cameraId}/codec`);
+				if (!codecResponse.ok) throw new Error(`Codec fetch failed: ${codecResponse.status}`);
+				const { codec } = await codecResponse.json();
+				const mimeType = `video/mp4; codecs="${codec}"`;
+
+				// Create SourceBuffer with correct codec
+				sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+				sourceBuffer.addEventListener('error', (e) => console.error('[VIDEO] SourceBuffer error:', e));
+
+				// Now start the stream
+				const response = await fetch(`/api/stream/${cameraId}`);
+				if (!response.ok) throw new Error(`Stream failed: ${response.status}`);
+				if (!response.body) throw new Error('No response body');
+
+				const reader = response.body.getReader();
+
+				const processChunks = async () => {
+					try {
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+
+							if (!sourceBuffer.updating) {
+								sourceBuffer.appendBuffer(value);
+								if (!initReceived) {
+									initReceived = true;
+								}
+							}
+
+							// Wait for buffer to finish updating
+							await new Promise(resolve => {
+								if (!sourceBuffer!.updating) {
+									resolve(void 0);
+								} else {
+									sourceBuffer!.addEventListener('updateend', resolve, { once: true });
+								}
+							});
+						}
+					} catch (e) {
+						console.error('[VIDEO] Stream processing error:', e);
+					}
+				};
+
+				processChunks();
+
+			} catch (e) {
+				console.error('[VIDEO] Stream setup error:', e);
+			}
+		});
+
+		video.src = URL.createObjectURL(mediaSource);
+		video.play().catch(e => console.error('[VIDEO] Play failed:', e));
+
+		return cleanup;
+	}, [cameraId]);
+
+	return <video ref={videoRef} controls autoPlay playsInline className={className} />;
+}
+
 type Camera = {
 	id: string;
 	name: string;
@@ -21,6 +113,8 @@ export default function Home() {
 	const [connected, setConnected] = useState(false);
 	const [cameras, setCameras] = useState<Camera[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [selectedCameras, setSelectedCameras] = useState<Set<string>>(new Set());
+	const [viewMode, setViewMode] = useState<"single" | "grid">("single");
 	const [error, setError] = useState<string | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -67,97 +161,53 @@ export default function Home() {
 
 	const connect = () => connectWithCredentials(conn);
 
-	useEffect(() => {
-		if (!selectedId || !videoRef.current || !connected) return;
-		const video = videoRef.current;
-		
-		if (!window.MediaSource) {
-			console.error('[VIDEO] MediaSource not supported');
-			return;
-		}
-		
-		const mediaSource = new MediaSource();
-		let sourceBuffer: SourceBuffer | null = null;
-		let initReceived = false;
-		
-		const cleanup = () => {
-			try {
-				if (sourceBuffer && !sourceBuffer.updating) {
-					mediaSource.removeSourceBuffer(sourceBuffer);
-				}
-				if (mediaSource.readyState === 'open') {
-					mediaSource.endOfStream();
-				}
-			} catch (e) {
-				console.log('[VIDEO] Cleanup error (normal):', e);
+	const toggleCameraSelection = (cameraId: string) => {
+		setSelectedCameras(prev => {
+			const newSet = new Set(prev);
+			if (newSet.has(cameraId)) {
+				newSet.delete(cameraId);
+			} else if (newSet.size < 4) {
+				newSet.add(cameraId);
 			}
-		};
-		
-		mediaSource.addEventListener('sourceopen', async () => {
-			try {
-				// Get codec info first
-				const codecResponse = await fetch(`/api/stream/${selectedId}/codec`);
-				if (!codecResponse.ok) throw new Error(`Codec fetch failed: ${codecResponse.status}`);
-				const { codec } = await codecResponse.json();
-				const mimeType = `video/mp4; codecs="${codec}"`;
-				
-				// Create SourceBuffer with correct codec
-				sourceBuffer = mediaSource.addSourceBuffer(mimeType);
-				sourceBuffer.addEventListener('error', (e) => console.error('[VIDEO] SourceBuffer error:', e));
-				
-				// Now start the stream
-				const response = await fetch(`/api/stream/${selectedId}`);
-				if (!response.ok) throw new Error(`Stream failed: ${response.status}`);
-				if (!response.body) throw new Error('No response body');
-				
-				const reader = response.body.getReader();
-				
-				const processChunks = async () => {
-					try {
-						while (true) {
-							const { done, value } = await reader.read();
-							if (done) break;
-							
-							if (!sourceBuffer.updating) {
-								sourceBuffer.appendBuffer(value);
-								if (!initReceived) {
-									initReceived = true;
-								}
-							}
-							
-							// Wait for buffer to finish updating
-							await new Promise(resolve => {
-								if (!sourceBuffer!.updating) {
-									resolve(void 0);
-								} else {
-									sourceBuffer!.addEventListener('updateend', resolve, { once: true });
-								}
-							});
-						}
-					} catch (e) {
-						console.error('[VIDEO] Stream processing error:', e);
-					}
-				};
-				
-				processChunks();
-				
-			} catch (e) {
-				console.error('[VIDEO] Stream setup error:', e);
-			}
+			return newSet;
 		});
-		
-		video.src = URL.createObjectURL(mediaSource);
-		video.play().catch(e => console.error('[VIDEO] Play failed:', e));
-		
-		return cleanup;
-	}, [selectedId, connected]);
+	};
+
+	const clearCameraSelection = () => {
+		setSelectedCameras(new Set());
+	};
+
 
 	return (
 		<main className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
 			<div className="mx-auto max-w-7xl p-6">
 				<header className="mb-6 flex items-center justify-between">
 					<h1 className="text-xl font-semibold tracking-tight">UniFi Protect Live</h1>
-					<div className="text-sm opacity-70">Business camera viewer</div>
+					<div className="flex items-center gap-4">
+						<div className="flex rounded-lg border border-neutral-200 dark:border-neutral-800">
+							<button
+								onClick={() => setViewMode("single")}
+								className={`px-3 py-1 text-sm rounded-l-lg transition-colors ${
+									viewMode === "single"
+										? "bg-blue-600 text-white"
+										: "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+								}`}
+							>
+								Single
+							</button>
+							<button
+								onClick={() => setViewMode("grid")}
+								className={`px-3 py-1 text-sm rounded-r-lg transition-colors ${
+									viewMode === "grid"
+										? "bg-blue-600 text-white"
+										: "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+								}`}
+							>
+								Grid (4)
+							</button>
+						</div>
+						<div className="text-sm opacity-70">Business camera viewer</div>
+					</div>
 				</header>
 
 				<div className="mb-6 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
@@ -208,20 +258,45 @@ export default function Home() {
 				<section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
 					<aside className="lg:col-span-3">
 						<div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-							<div className="mb-3 text-sm font-medium">Cameras</div>
+							<div className="mb-3 flex items-center justify-between">
+								<div className="text-sm font-medium">Cameras</div>
+								{viewMode === "grid" && selectedCameras.size > 0 && (
+									<button
+										onClick={clearCameraSelection}
+										className="text-xs text-blue-600 hover:text-blue-700"
+									>
+										Clear ({selectedCameras.size})
+									</button>
+								)}
+							</div>
 							<div className="space-y-1">
 								{cameras.map((cam) => (
-									<button
+									<div
 										key={cam.id}
-										onClick={() => setSelectedId(cam.id)}
-										className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
-											selectedId === cam.id
-												? "bg-blue-600 text-white"
+										className={`w-full rounded-md px-3 py-2 transition-colors cursor-pointer ${
+											viewMode === "single"
+												? selectedId === cam.id
+													? "bg-blue-600 text-white"
+													: "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+												: selectedCameras.has(cam.id)
+												? "bg-blue-100 dark:bg-blue-900"
 												: "hover:bg-neutral-100 dark:hover:bg-neutral-800"
 										}`}
+										onClick={() => viewMode === "single" ? setSelectedId(cam.id) : toggleCameraSelection(cam.id)}
 									>
 										<div className="flex items-center justify-between">
-											<span className="truncate">{cam.name}</span>
+											<div className="flex items-center gap-2">
+												{viewMode === "grid" && (
+													<input
+														type="checkbox"
+														checked={selectedCameras.has(cam.id)}
+														onChange={() => toggleCameraSelection(cam.id)}
+														disabled={!selectedCameras.has(cam.id) && selectedCameras.size >= 4}
+														className="rounded border-neutral-300"
+													/>
+												)}
+												<span className="truncate text-sm">{cam.name}</span>
+											</div>
 											{cam.isOnline !== undefined && (
 												<span
 													className={`ml-2 inline-block h-2 w-2 rounded-full ${
@@ -230,21 +305,61 @@ export default function Home() {
 												/>
 											)}
 										</div>
-									</button>
+									</div>
 								))}
 								{cameras.length === 0 && (
 									<div className="text-sm opacity-70">No cameras yet. Connect above.</div>
+								)}
+								{error && <div className="text-sm text-red-600">{error}</div>}
+								{viewMode === "grid" && (
+									<div className="mt-3 text-xs opacity-70">
+										Select up to 4 cameras for grid view
+									</div>
 								)}
 							</div>
 						</div>
 					</aside>
 
 					<section className="lg:col-span-9">
-						<div className="aspect-video w-full overflow-hidden rounded-lg border border-neutral-200 bg-black shadow-sm dark:border-neutral-800">
-							<video ref={videoRef} controls autoPlay playsInline className="size-full" />
-						</div>
-						{!selectedId && (
-							<div className="mt-3 text-sm opacity-70">Select a camera to start streaming.</div>
+						{viewMode === "single" ? (
+							<>
+								<div className="aspect-video w-full overflow-hidden rounded-lg border border-neutral-200 bg-black shadow-sm dark:border-neutral-800">
+									{selectedId && connected ? (
+										<VideoPlayer cameraId={selectedId} className="size-full" />
+									) : (
+										<div className="flex size-full items-center justify-center text-neutral-500">
+											{!connected ? "Connect to view cameras" : "Select a camera to start streaming"}
+										</div>
+									)}
+								</div>
+							</>
+						) : (
+							<div className="grid grid-cols-2 gap-4">
+								{Array.from(selectedCameras).slice(0, 4).map((cameraId) => {
+									const camera = cameras.find(c => c.id === cameraId);
+									return (
+										<div key={cameraId} className="aspect-video overflow-hidden rounded-lg border border-neutral-200 bg-black shadow-sm dark:border-neutral-800">
+											<div className="relative size-full">
+												{connected ? (
+													<VideoPlayer cameraId={cameraId} className="size-full" />
+												) : (
+													<div className="flex size-full items-center justify-center text-neutral-500">
+														Connect to view
+													</div>
+												)}
+												<div className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
+													{camera?.name || cameraId}
+												</div>
+											</div>
+										</div>
+									);
+								})}
+								{selectedCameras.size === 0 && (
+									<div className="col-span-2 flex aspect-video items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900">
+										Select cameras to view in grid mode
+									</div>
+								)}
+							</div>
 						)}
 					</section>
 				</section>
