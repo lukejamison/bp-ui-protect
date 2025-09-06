@@ -43,17 +43,31 @@ class ProtectConnectionManager {
   }
 
   private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
-    if (allowSelfSigned) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    }
+    try {
+      if (allowSelfSigned) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+      }
 
-    // Load the module at runtime only - never at build time
-    const protect = await this.loadProtectApi();
-    await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
-    await protect.getBootstrap();
-    
-    console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
-    return protect;
+      console.log(`[PROTECT] Creating connection to ${baseUrl}...`);
+      
+      // Load the module at runtime only - never at build time
+      const protect = await this.loadProtectApi();
+      
+      console.log(`[PROTECT] Attempting login for ${username}...`);
+      await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
+      
+      console.log(`[PROTECT] Login successful, getting bootstrap...`);
+      await protect.getBootstrap();
+      
+      console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
+      return protect;
+    } catch (error) {
+      console.error(`[PROTECT] Connection failed for ${baseUrl}:`, {
+        error: error instanceof Error ? error.message : error,
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
+    }
   }
 
   private async loadProtectApi(): Promise<any> {
@@ -63,13 +77,24 @@ class ProtectConnectionManager {
         throw new Error('Cannot load unifi-protect in browser environment');
       }
 
+      console.log('[PROTECT] Attempting to load unifi-protect module...');
+      
       // Use Function constructor to avoid static analysis
       const dynamicImport = new Function('specifier', 'return import(specifier)');
       const protectModule = await dynamicImport('unifi-protect');
-      return new protectModule.ProtectApi();
+      
+      console.log('[PROTECT] Module loaded successfully, creating ProtectApi instance...');
+      const api = new protectModule.ProtectApi();
+      console.log('[PROTECT] ProtectApi instance created successfully');
+      
+      return api;
     } catch (error) {
-      console.error('[PROTECT] Failed to load unifi-protect:', error);
-      throw new Error('Unable to load UniFi Protect API. Please ensure unifi-protect package is installed.');
+      console.error('[PROTECT] Failed to load unifi-protect module:', {
+        error: error instanceof Error ? error.message : error,
+        stack: error instanceof Error ? error.stack : undefined,
+        type: typeof error
+      });
+      throw new Error(`Unable to load UniFi Protect API: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

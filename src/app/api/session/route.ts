@@ -11,9 +11,15 @@ export async function POST(req: NextRequest) {
 		}
 		const id = createSession({ baseUrl, accessKey, username, password, allowSelfSigned: !!allowSelfSigned });
 		const res = NextResponse.json({ ok: true });
+		
+		// Determine if we should use secure cookies based on the request protocol
+		const protocol = req.headers.get('x-forwarded-proto') || 
+			(req.url.startsWith('https') ? 'https' : 'http');
+		const isSecure = protocol === 'https';
+		
 		res.cookies.set(SESSION_COOKIE, id, {
 			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
+			secure: isSecure,
 			path: "/",
 			sameSite: "lax",
 			maxAge: 60 * 60, // 1 hour
