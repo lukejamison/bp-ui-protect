@@ -1,10 +1,8 @@
-import { ProtectApi } from "unifi-protect";
-
 // Global connection manager to prevent multiple simultaneous logins
 class ProtectConnectionManager {
   private static instance: ProtectConnectionManager;
-  private connections = new Map<string, ProtectApi>();
-  private loginPromises = new Map<string, Promise<ProtectApi>>();
+  private connections = new Map<string, any>();
+  private loginPromises = new Map<string, Promise<any>>();
 
   static getInstance(): ProtectConnectionManager {
     if (!ProtectConnectionManager.instance) {
@@ -13,7 +11,7 @@ class ProtectConnectionManager {
     return ProtectConnectionManager.instance;
   }
 
-  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
+  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
     const key = `${baseUrl}:${username}`;
     
     // Return existing connection if available and still valid
@@ -44,17 +42,35 @@ class ProtectConnectionManager {
     }
   }
 
-  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
+  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
     if (allowSelfSigned) {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
     }
 
-    const protect = new ProtectApi();
+    // Load the module at runtime only - never at build time
+    const protect = await this.loadProtectApi();
     await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
     await protect.getBootstrap();
     
     console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
     return protect;
+  }
+
+  private async loadProtectApi(): Promise<any> {
+    try {
+      // Try to load the module only at runtime
+      if (typeof window !== 'undefined') {
+        throw new Error('Cannot load unifi-protect in browser environment');
+      }
+
+      // Use Function constructor to avoid static analysis
+      const dynamicImport = new Function('specifier', 'return import(specifier)');
+      const protectModule = await dynamicImport('unifi-protect');
+      return new protectModule.ProtectApi();
+    } catch (error) {
+      console.error('[PROTECT] Failed to load unifi-protect:', error);
+      throw new Error('Unable to load UniFi Protect API. Please ensure unifi-protect package is installed.');
+    }
   }
 
   // Clean up old connections
