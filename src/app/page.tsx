@@ -3,12 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 
+// Helper function to detect iOS
+function isIOS() {
+	return /iPad|iPhone|iPod/.test(navigator.userAgent);
+}
+
+// Helper function to detect Safari
+function isSafari() {
+	return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+}
+
 // Reusable video player component for MSE streaming
 function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string; className?: string; delay?: number }) {
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const cleanupRef = useRef<(() => void) | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [hasError, setHasError] = useState(false);
+	const [useDirectStream, setUseDirectStream] = useState(false);
 
 	useEffect(() => {
 		if (!cameraId || !videoRef.current) return;
@@ -16,6 +27,10 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 		// Reset states
 		setIsLoading(true);
 		setHasError(false);
+		
+		// Check if we should use direct stream for iOS/Safari
+		const shouldUseDirectStream = isIOS() || (isSafari() && !window.MediaSource);
+		setUseDirectStream(shouldUseDirectStream);
 		
 		// Add delay for staggered loading
 		const startStream = async () => {
@@ -32,11 +47,10 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 				cleanupRef.current = null;
 			}
 
-			if (!window.MediaSource) {
-				console.error('[VIDEO] MediaSource not supported');
-				setHasError(true);
-				setIsLoading(false);
-				return;
+			// Use direct stream for iOS or if MSE is not supported
+			if (shouldUseDirectStream || !window.MediaSource) {
+				console.log('[VIDEO] Using direct stream approach for mobile/Safari');
+				return startDirectStream(video);
 			}
 
 			const mediaSource = new MediaSource();
@@ -169,6 +183,30 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 
 		return cleanup;
 		};
+
+		// Direct stream function for iOS/Safari compatibility
+		const startDirectStream = async (video: HTMLVideoElement) => {
+			try {
+				console.log('[VIDEO] Starting iOS-compatible stream');
+				
+				// Hide the video element and show a message for now
+				video.style.display = 'none';
+				setIsLoading(false);
+				setHasError(true);
+				
+				const cleanup = () => {
+					// Nothing to clean up for now
+				};
+				
+				cleanupRef.current = cleanup;
+				return cleanup;
+				
+			} catch (error) {
+				console.error('[VIDEO] iOS stream setup failed:', error);
+				setHasError(true);
+				setIsLoading(false);
+			}
+		};
 		
 		startStream();
 	}, [cameraId, delay]);
@@ -188,13 +226,26 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 				<div className="absolute inset-0 flex items-center justify-center bg-gray-900">
 					<div className="flex flex-col items-center space-y-2">
 						<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-						<div className="text-white text-sm">Loading stream...</div>
+						<div className="text-white text-sm">
+							Loading stream...
+							{useDirectStream && <div className="text-xs opacity-70">Mobile optimized</div>}
+						</div>
 					</div>
 				</div>
 			)}
 			{hasError && (
 				<div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-					<div className="text-red-400 text-sm">Failed to load stream</div>
+					<div className="text-center">
+						<div className="text-red-400 text-sm">
+							{useDirectStream ? "iOS/Mobile streaming not yet supported" : "Failed to load stream"}
+						</div>
+						{useDirectStream && (
+							<div className="text-xs text-gray-400 mt-1">
+								Please use a desktop browser for now.<br/>
+								Mobile support coming soon!
+							</div>
+						)}
+					</div>
 				</div>
 			)}
 		</div>
@@ -298,7 +349,7 @@ export default function Home() {
 			<div className="mx-auto max-w-7xl p-6">
 				<header className="mb-6 flex items-center justify-between">
 					<div className="flex items-center gap-3">
-						<Image 
+        <Image
 							src="/bushards-logo.jpeg" 
 							alt="Bushards Logo" 
 							width={32}
