@@ -1,10 +1,10 @@
-// Dynamic import to avoid bundling issues
+import { ProtectApi } from "unifi-protect";
 
 // Global connection manager to prevent multiple simultaneous logins
 class ProtectConnectionManager {
   private static instance: ProtectConnectionManager;
-  private connections = new Map<string, any>();
-  private loginPromises = new Map<string, Promise<any>>();
+  private connections = new Map<string, ProtectApi>();
+  private loginPromises = new Map<string, Promise<ProtectApi>>();
 
   static getInstance(): ProtectConnectionManager {
     if (!ProtectConnectionManager.instance) {
@@ -13,7 +13,7 @@ class ProtectConnectionManager {
     return ProtectConnectionManager.instance;
   }
 
-  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
+  async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
     const key = `${baseUrl}:${username}`;
     
     // Return existing connection if available and still valid
@@ -44,25 +44,17 @@ class ProtectConnectionManager {
     }
   }
 
-  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
+  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<ProtectApi> {
     if (allowSelfSigned) {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
     }
 
-    try {
-      // Dynamic import to avoid bundling issues - use eval to prevent static analysis
-      const modulePath = 'unifi-protect';
-      const { ProtectApi } = await (eval('import') as any)(modulePath);
-      const protect = new ProtectApi();
-      await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
-      await protect.getBootstrap();
-      
-      console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
-      return protect;
-    } catch (error) {
-      console.error('[PROTECT] Failed to load unifi-protect module:', error);
-      throw error;
-    }
+    const protect = new ProtectApi();
+    await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
+    await protect.getBootstrap();
+    
+    console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
+    return protect;
   }
 
   // Clean up old connections
