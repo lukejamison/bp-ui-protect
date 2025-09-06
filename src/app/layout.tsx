@@ -16,9 +16,9 @@ export const metadata: Metadata = {
   title: "View Cameras",
   description: "UniFi Protect Camera Viewer - Monitor your business cameras in real-time",
   icons: {
-    icon: "/favicon.png",
-    shortcut: "/favicon.png",
-    apple: "/favicon.png",
+    icon: "/bushards-logo.jpeg",
+    shortcut: "/bushards-logo.jpeg",
+    apple: "/bushards-logo.jpeg",
   },
 };
 

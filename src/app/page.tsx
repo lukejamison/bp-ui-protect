@@ -299,11 +299,11 @@ export default function Home() {
 				<header className="mb-6 flex items-center justify-between">
 					<div className="flex items-center gap-3">
 						<Image 
-							src="/favicon.png" 
+							src="/bushards-logo.jpeg" 
 							alt="Bushards Logo" 
 							width={32}
 							height={32}
-							className="h-8 w-8"
+							className="h-8 w-8 rounded-full"
 						/>
 						<h1 className="text-xl font-semibold tracking-tight">View Cameras</h1>
 					</div>
