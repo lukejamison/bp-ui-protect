@@ -1,3 +1,5 @@
+import { memoryMonitor } from './memory-monitor';
+
 // Global connection manager to prevent multiple simultaneous logins
 class ProtectConnectionManager {
   private static instance: ProtectConnectionManager;
@@ -7,8 +9,19 @@ class ProtectConnectionManager {
   static getInstance(): ProtectConnectionManager {
     if (!ProtectConnectionManager.instance) {
       ProtectConnectionManager.instance = new ProtectConnectionManager();
+      // Initialize memory monitoring when the singleton is created
+      ProtectConnectionManager.instance.initializeMemoryMonitoring();
     }
     return ProtectConnectionManager.instance;
+  }
+
+  private initializeMemoryMonitoring(): void {
+    try {
+      memoryMonitor.start();
+      console.log('[PROTECT] Memory monitoring initialized for Pi deployment');
+    } catch (error) {
+      console.error('[PROTECT] Failed to initialize memory monitoring:', error);
+    }
   }
 
   async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {

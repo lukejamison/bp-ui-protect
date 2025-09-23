@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  bp-ui-protect:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # UniFi Protect Configuration
+      - NVR_IP=${NVR_IP:-}
+      - PROTECT_USERNAME=${PROTECT_USERNAME:-}
+      - PROTECT_PASSWORD=${PROTECT_PASSWORD:-}
+    volumes:
+      # Optional: Mount logs directory for persistence
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/env"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - protect-network
+
+networks:
+  protect-network:
+    driver: bridge
