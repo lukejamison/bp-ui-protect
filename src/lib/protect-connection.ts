@@ -1,10 +1,41 @@
 import { memoryMonitor } from './memory-monitor';
 
+interface CachedBootstrap {
+  data: any;
+  timestamp: number;
+}
+
+interface CachedCodec {
+  codec: string;
+  timestamp: number;
+}
+
+interface ConnectionMetadata {
+  api: any;
+  lastHealthCheck: number;
+  isHealthy: boolean;
+}
+
+interface ActiveStream {
+  livestream: any;
+  timestamp: number;
+  requestCount: number;
+}
+
 // Global connection manager to prevent multiple simultaneous logins
 class ProtectConnectionManager {
   private static instance: ProtectConnectionManager;
-  private connections = new Map<string, any>();
+  private connections = new Map<string, ConnectionMetadata>();
   private loginPromises = new Map<string, Promise<any>>();
+  private bootstrapCache = new Map<string, CachedBootstrap>();
+  private codecCache = new Map<string, CachedCodec>();
+  private activeStreams = new Map<string, ActiveStream>();
+  
+  // Cache TTLs
+  private readonly BOOTSTRAP_CACHE_TTL = 30 * 1000; // 30 seconds
+  private readonly CODEC_CACHE_TTL = 5 * 60 * 1000; // 5 minutes (codecs rarely change)
+  private readonly HEALTH_CHECK_INTERVAL = 60 * 1000; // 1 minute
+  private readonly STREAM_REUSE_WINDOW = 5 * 1000; // 5 seconds - reuse stream if requested within this window
 
   static getInstance(): ProtectConnectionManager {
     if (!ProtectConnectionManager.instance) {
@@ -24,14 +55,103 @@ class ProtectConnectionManager {
     }
   }
 
+  /**
+   * Get cached bootstrap data if available and fresh
+   */
+  getCachedBootstrap(key: string): any | null {
+    const cached = this.bootstrapCache.get(key);
+    if (!cached) return null;
+    
+    const age = Date.now() - cached.timestamp;
+    if (age > this.BOOTSTRAP_CACHE_TTL) {
+      this.bootstrapCache.delete(key);
+      return null;
+    }
+    
+    console.log(`[PROTECT] Using cached bootstrap (age: ${Math.round(age / 1000)}s)`);
+    return cached.data;
+  }
+
+  /**
+   * Cache bootstrap data
+   */
+  private cacheBootstrap(key: string, data: any): void {
+    this.bootstrapCache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Get cached codec for a camera
+   */
+  getCachedCodec(cameraId: string): string | null {
+    const cached = this.codecCache.get(cameraId);
+    if (!cached) return null;
+    
+    const age = Date.now() - cached.timestamp;
+    if (age > this.CODEC_CACHE_TTL) {
+      this.codecCache.delete(cameraId);
+      return null;
+    }
+    
+    console.log(`[PROTECT] Using cached codec for ${cameraId}`);
+    return cached.codec;
+  }
+
+  /**
+   * Cache codec for a camera
+   */
+  cacheCodec(cameraId: string, codec: string): void {
+    this.codecCache.set(cameraId, {
+      codec,
+      timestamp: Date.now()
+    });
+    console.log(`[PROTECT] Cached codec for ${cameraId}: ${codec}`);
+  }
+
+  /**
+   * Check if a connection is healthy
+   */
+  private async isConnectionHealthy(metadata: ConnectionMetadata): Promise<boolean> {
+    const timeSinceCheck = Date.now() - metadata.lastHealthCheck;
+    
+    // If we checked recently, use cached result
+    if (timeSinceCheck < this.HEALTH_CHECK_INTERVAL) {
+      return metadata.isHealthy;
+    }
+    
+    // Perform health check
+    try {
+      const api = metadata.api;
+      if (!api || !api.bootstrap) {
+        return false;
+      }
+      
+      // Simple check - does bootstrap data exist
+      metadata.lastHealthCheck = Date.now();
+      metadata.isHealthy = true;
+      return true;
+    } catch (error) {
+      metadata.isHealthy = false;
+      return false;
+    }
+  }
+
   async getConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
     const key = `${baseUrl}:${username}`;
     
-    // Return existing connection if available and still valid
+    // Check existing connection health
     const existing = this.connections.get(key);
-    if (existing && existing.bootstrap) {
-      console.log(`[PROTECT] Reusing existing connection for ${key}`);
-      return existing;
+    if (existing) {
+      const isHealthy = await this.isConnectionHealthy(existing);
+      if (isHealthy && existing.api && existing.api.bootstrap) {
+        console.log(`[PROTECT] Reusing healthy connection for ${key}`);
+        return existing.api;
+      } else {
+        console.log(`[PROTECT] Existing connection unhealthy, reconnecting...`);
+        this.connections.delete(key);
+      }
     }
 
     // If login is already in progress, wait for it
@@ -43,19 +163,23 @@ class ProtectConnectionManager {
 
     // Start new login
     console.log(`[PROTECT] Creating new connection for ${key}`);
-    const loginPromise = this.createConnection(baseUrl, username, password, allowSelfSigned);
+    const loginPromise = this.createConnection(baseUrl, username, password, allowSelfSigned, key);
     this.loginPromises.set(key, loginPromise);
 
     try {
       const protect = await loginPromise;
-      this.connections.set(key, protect);
+      this.connections.set(key, {
+        api: protect,
+        lastHealthCheck: Date.now(),
+        isHealthy: true
+      });
       return protect;
     } finally {
       this.loginPromises.delete(key);
     }
   }
 
-  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean): Promise<any> {
+  private async createConnection(baseUrl: string, username: string, password: string, allowSelfSigned: boolean, key: string): Promise<any> {
     try {
       if (allowSelfSigned) {
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -67,10 +191,31 @@ class ProtectConnectionManager {
       const protect = await this.loadProtectApi();
       
       console.log(`[PROTECT] Attempting login for ${username}...`);
-      await protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
+      
+      // Add timeout to login operation
+      const loginTimeout = 30000; // 30 seconds
+      await Promise.race([
+        protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Login timeout after 30s')), loginTimeout)
+        )
+      ]);
       
       console.log(`[PROTECT] Login successful, getting bootstrap...`);
-      await protect.getBootstrap();
+      
+      // Add timeout to bootstrap fetch
+      const bootstrapTimeout = 30000; // 30 seconds
+      await Promise.race([
+        protect.getBootstrap(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Bootstrap fetch timeout after 30s')), bootstrapTimeout)
+        )
+      ]);
+      
+      // Cache the bootstrap data
+      if (protect.bootstrap) {
+        this.cacheBootstrap(key, protect.bootstrap);
+      }
       
       console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
       return protect;
@@ -116,6 +261,68 @@ class ProtectConnectionManager {
     const key = `${baseUrl}:${username}`;
     this.connections.delete(key);
     this.loginPromises.delete(key);
+    this.bootstrapCache.delete(key);
+  }
+
+  /**
+   * Clear all caches - useful for debugging or after errors
+   */
+  clearAllCaches(): void {
+    this.bootstrapCache.clear();
+    this.codecCache.clear();
+    console.log('[PROTECT] All caches cleared');
+  }
+
+  /**
+   * Get or create a stream for a camera - deduplicates requests
+   */
+  getOrCreateStream(cameraId: string, protect: any): any {
+    const existing = this.activeStreams.get(cameraId);
+    
+    // Reuse existing stream if it was just created
+    if (existing) {
+      const age = Date.now() - existing.timestamp;
+      if (age < this.STREAM_REUSE_WINDOW) {
+        existing.requestCount++;
+        console.log(`[PROTECT] Reusing active stream for ${cameraId} (${existing.requestCount} requests)`);
+        return existing.livestream;
+      } else {
+        // Clean up old stream
+        try {
+          existing.livestream.stop();
+        } catch (e) {
+          // Ignore errors stopping old stream
+        }
+        this.activeStreams.delete(cameraId);
+      }
+    }
+
+    // Create new stream
+    console.log(`[PROTECT] Creating new stream for ${cameraId}`);
+    const livestream = protect.createLivestream();
+    this.activeStreams.set(cameraId, {
+      livestream,
+      timestamp: Date.now(),
+      requestCount: 1
+    });
+
+    return livestream;
+  }
+
+  /**
+   * Remove a stream from active streams
+   */
+  removeStream(cameraId: string): void {
+    const existing = this.activeStreams.get(cameraId);
+    if (existing) {
+      try {
+        existing.livestream.stop();
+      } catch (e) {
+        // Ignore errors
+      }
+      this.activeStreams.delete(cameraId);
+      console.log(`[PROTECT] Removed stream for ${cameraId}`);
+    }
   }
 }
 

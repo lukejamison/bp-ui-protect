@@ -11,6 +11,15 @@ export async function GET(req: NextRequest) {
     if (!baseUrl) throw new Error("Invalid session: baseUrl");
     if (!username || !password) throw new Error("Invalid session: missing credentials");
 
+    const key = `${baseUrl}:${username}`;
+    
+    // Try cache first
+    const cached = protectConnectionManager.getCachedBootstrap(key);
+    if (cached) {
+      return NextResponse.json(cached);
+    }
+
+    // If not cached, get from connection (which will cache it)
     const protect = await protectConnectionManager.getConnection(baseUrl, username, password, allowSelfSigned || false);
     return NextResponse.json(protect.bootstrap);
   } catch (error: any) {

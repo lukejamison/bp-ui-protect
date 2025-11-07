@@ -35,7 +35,8 @@ export async function GET(
     }
     console.log(`[STREAM] Starting stream for camera: ${camera.name || camera.id}`);
 
-    const livestream = protect.createLivestream();
+    // Use connection manager's stream deduplication
+    const livestream = protectConnectionManager.getOrCreateStream(cameraId, protect);
     const started = await livestream.start(camera.id ?? cameraId, 0, { requestId: `ui-${Date.now()}` });
     if (!started) {
       return new Response(JSON.stringify({ error: "Failed to start livestream" }), { status: 500 });
@@ -97,6 +98,8 @@ export async function GET(
         console.log(`[STREAM] Stream cancelled for camera ${cameraId}`);
         try { 
           livestream.stop(); 
+          // Remove from active streams
+          protectConnectionManager.removeStream(cameraId);
         } catch (e) {
           console.log(`[STREAM] Error stopping livestream:`, e);
         }

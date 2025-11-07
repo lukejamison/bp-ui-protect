@@ -19,7 +19,10 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 	const cleanupRef = useRef<(() => void) | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [hasError, setHasError] = useState(false);
+	const [errorMessage, setErrorMessage] = useState<string>("");
 	const [useDirectStream, setUseDirectStream] = useState(false);
+	const [retryCount, setRetryCount] = useState(0);
+	const maxRetries = 3;
 
 	useEffect(() => {
 		if (!cameraId || !videoRef.current) return;
@@ -27,6 +30,7 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 		// Reset states
 		setIsLoading(true);
 		setHasError(false);
+		setErrorMessage("");
 		
 		// Check if we should use direct stream for iOS/Safari
 		const shouldUseDirectStream = isIOS() || (isSafari() && !window.MediaSource);
@@ -91,14 +95,17 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 			try {
 				// Get codec info first with timeout
 				const codecController = new AbortController();
-				const codecTimeout = setTimeout(() => codecController.abort(), 15000); // 15 second timeout
+				const codecTimeout = setTimeout(() => codecController.abort(), 20000); // 20 second timeout
 				
 				const codecResponse = await fetch(`/api/stream/${cameraId}/codec`, {
 					signal: codecController.signal
 				});
 				clearTimeout(codecTimeout);
 				
-				if (!codecResponse.ok) throw new Error(`Codec fetch failed: ${codecResponse.status}`);
+				if (!codecResponse.ok) {
+					const errorText = await codecResponse.text().catch(() => 'Unknown error');
+					throw new Error(`Codec fetch failed (${codecResponse.status}): ${errorText}`);
+				}
 				const { codec } = await codecResponse.json();
 				const mimeType = `video/mp4; codecs="${codec}"`;
 
@@ -110,14 +117,17 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 
 				// Now start the stream with timeout
 				const streamController = new AbortController();
-				const streamTimeout = setTimeout(() => streamController.abort(), 20000); // 20 second timeout
+				const streamTimeout = setTimeout(() => streamController.abort(), 30000); // 30 second timeout
 				
 				const response = await fetch(`/api/stream/${cameraId}`, {
 					signal: streamController.signal
 				});
 				clearTimeout(streamTimeout);
 				
-				if (!response.ok) throw new Error(`Stream failed: ${response.status}`);
+				if (!response.ok) {
+					const errorText = await response.text().catch(() => 'Unknown error');
+					throw new Error(`Stream failed (${response.status}): ${errorText}`);
+				}
 				if (!response.body) throw new Error('No response body');
 
 				const reader = response.body.getReader();
@@ -153,6 +163,7 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 						if (e?.name !== 'AbortError') {
 							console.error('[VIDEO] Stream processing error:', e);
 							setHasError(true);
+							setErrorMessage(e?.message || 'Stream processing failed');
 						}
 						setIsLoading(false);
 					}
@@ -167,6 +178,7 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 					if (e?.name !== 'AbortError') {
 						console.error('[VIDEO] Stream setup error:', e);
 						setHasError(true);
+						setErrorMessage(e?.message || 'Failed to setup stream');
 					}
 					setIsLoading(false);
 				}
@@ -201,15 +213,16 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 				cleanupRef.current = cleanup;
 				return cleanup;
 				
-			} catch (error) {
+			} catch (error: any) {
 				console.error('[VIDEO] iOS stream setup failed:', error);
 				setHasError(true);
+				setErrorMessage(error?.message || 'Mobile streaming not supported');
 				setIsLoading(false);
 			}
 		};
 		
 		startStream();
-	}, [cameraId, delay]);
+	}, [cameraId, delay, retryCount]);
 
 	return (
 		<div className={`relative ${className}`}>
@@ -235,14 +248,34 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 			)}
 			{hasError && (
 				<div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-					<div className="text-center">
-						<div className="text-red-400 text-sm">
+					<div className="text-center px-4">
+						<div className="text-red-400 text-sm mb-2">
 							{useDirectStream ? "iOS/Mobile streaming not yet supported" : "Failed to load stream"}
 						</div>
-						{useDirectStream && (
+						{errorMessage && !useDirectStream && (
+							<div className="text-xs text-gray-400 mb-3 max-w-md">
+								{errorMessage}
+							</div>
+						)}
+						{useDirectStream ? (
 							<div className="text-xs text-gray-400 mt-1">
 								Please use a desktop browser for now.<br/>
 								Mobile support coming soon!
+							</div>
+						) : retryCount < maxRetries ? (
+							<button
+								onClick={() => {
+									setRetryCount(prev => prev + 1);
+									setHasError(false);
+									setIsLoading(true);
+								}}
+								className="px-4 py-2 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
+							>
+								Retry ({retryCount + 1}/{maxRetries})
+							</button>
+						) : (
+							<div className="text-xs text-gray-500">
+								Max retries reached. Please refresh the page.
 							</div>
 						)}
 					</div>
@@ -274,10 +307,14 @@ export default function Home() {
 	const [selectedCameras, setSelectedCameras] = useState<Set<string>>(new Set());
 	const [viewMode, setViewMode] = useState<"single" | "grid">("grid");
 	const [error, setError] = useState<string | null>(null);
+	const [isConnecting, setIsConnecting] = useState(false);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const connectingRef = useRef(false); // Prevent duplicate connection attempts
 
 	// Load env defaults and auto-connect
 	useEffect(() => {
+		if (connectingRef.current) return; // Prevent duplicate loads
+		
 		fetch("/api/env")
 			.then((r) => r.json())
 			.then((env) => {
@@ -289,12 +326,24 @@ export default function Home() {
 					}
 				}
 			})
-			.catch(() => {}); // ignore errors
+			.catch((e) => {
+				console.error('[APP] Failed to load env:', e);
+			});
 	}, []);
 
 	const connectWithCredentials = async (credentials: Conn) => {
+		// Prevent duplicate connection attempts
+		if (connectingRef.current || isConnecting) {
+			console.log('[APP] Connection already in progress, skipping...');
+			return;
+		}
+		
+		connectingRef.current = true;
+		setIsConnecting(true);
 		setError(null);
+		
 		try {
+			console.log('[APP] Starting connection...');
 			const res = await fetch("/api/session", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -304,12 +353,16 @@ export default function Home() {
 				const body = await res.json().catch(() => ({}));
 				throw new Error(body?.error || `Failed to create session (${res.status})`);
 			}
+			
+			console.log('[APP] Session created, fetching cameras...');
 			const r = await fetch(`/api/cameras`, { cache: "no-store" });
 			if (!r.ok) {
-				throw new Error(`Failed to fetch cameras (${r.status})`);
+				const errorText = await r.text().catch(() => 'Unknown error');
+				throw new Error(`Failed to fetch cameras (${r.status}): ${errorText}`);
 			}
 			const data = await r.json();
 			const cameraList = Array.isArray(data) ? data : [];
+			console.log(`[APP] Fetched ${cameraList.length} cameras`);
 			setCameras(cameraList);
 			
 			// Auto-select first 3 cameras for grid view
@@ -320,8 +373,12 @@ export default function Home() {
 			
 			setConnected(true);
 		} catch (e: any) {
+			console.error('[APP] Connection failed:', e);
 			setConnected(false);
 			setError(String(e?.message || e));
+		} finally {
+			setIsConnecting(false);
+			connectingRef.current = false;
 		}
 	};
 
@@ -422,9 +479,10 @@ export default function Home() {
 						</label>
 						<button
 							onClick={connect}
-							className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+							disabled={isConnecting}
+							className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed"
 						>
-							{connected ? "Reconnect" : "Connect"}
+							{isConnecting ? "Connecting..." : connected ? "Reconnect" : "Connect"}
 						</button>
 					</div>
 					{error && <div className="mt-2 text-sm text-red-600">{error}</div>}
