@@ -24,8 +24,8 @@ COPY . .
 # Build the Next.js application
 RUN npm run build
 
-# Remove dev dependencies to reduce image size
-RUN npm prune --production
+# Remove dev dependencies to reduce image size, but keep TypeScript for next.config.ts
+RUN npm prune --production && npm install typescript
 
 # Expose the port the app runs on
 EXPOSE 3000

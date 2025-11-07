@@ -192,23 +192,23 @@ class ProtectConnectionManager {
       
       console.log(`[PROTECT] Attempting login for ${username}...`);
       
-      // Add timeout to login operation
-      const loginTimeout = 30000; // 30 seconds
+      // Add timeout to login operation (increased for slow NVR)
+      const loginTimeout = 45000; // 45 seconds
       await Promise.race([
         protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Login timeout after 30s')), loginTimeout)
+          setTimeout(() => reject(new Error('Login timeout after 45s - NVR may be slow or unreachable')), loginTimeout)
         )
       ]);
       
       console.log(`[PROTECT] Login successful, getting bootstrap...`);
       
-      // Add timeout to bootstrap fetch
-      const bootstrapTimeout = 30000; // 30 seconds
+      // Add timeout to bootstrap fetch (increased for slow NVR)
+      const bootstrapTimeout = 45000; // 45 seconds
       await Promise.race([
         protect.getBootstrap(),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Bootstrap fetch timeout after 30s')), bootstrapTimeout)
+          setTimeout(() => reject(new Error('Bootstrap fetch timeout after 45s - Check NVR performance')), bootstrapTimeout)
         )
       ]);
       

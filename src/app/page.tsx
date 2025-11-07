@@ -95,7 +95,7 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 			try {
 				// Get codec info first with timeout
 				const codecController = new AbortController();
-				const codecTimeout = setTimeout(() => codecController.abort(), 20000); // 20 second timeout
+				const codecTimeout = setTimeout(() => codecController.abort(), 30000); // 30 second timeout
 				
 				const codecResponse = await fetch(`/api/stream/${cameraId}/codec`, {
 					signal: codecController.signal
@@ -117,7 +117,7 @@ function VideoPlayer({ cameraId, className = "", delay = 0 }: { cameraId: string
 
 				// Now start the stream with timeout
 				const streamController = new AbortController();
-				const streamTimeout = setTimeout(() => streamController.abort(), 30000); // 30 second timeout
+				const streamTimeout = setTimeout(() => streamController.abort(), 45000); // 45 second timeout
 				
 				const response = await fetch(`/api/stream/${cameraId}`, {
 					signal: streamController.signal
