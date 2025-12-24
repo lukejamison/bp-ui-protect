@@ -12,6 +12,12 @@ export async function GET(req: NextRequest) {
     if (!username || !password) throw new Error("Invalid session: missing credentials");
 
     const protect = await protectConnectionManager.getConnection(baseUrl, username, password, allowSelfSigned || false);
+    
+    // Debug logging
+    console.log('[CAMERAS] Bootstrap exists:', !!protect.bootstrap);
+    console.log('[CAMERAS] Bootstrap keys:', protect.bootstrap ? Object.keys(protect.bootstrap) : 'N/A');
+    console.log('[CAMERAS] Cameras array length:', protect.bootstrap?.cameras?.length ?? 0);
+    
     const cameras = protect.bootstrap?.cameras ?? [];
     const simplified = cameras.map((c: unknown) => {
       const camera = c as Record<string, unknown>;
@@ -21,8 +27,11 @@ export async function GET(req: NextRequest) {
         isOnline: (camera.isConnected ?? camera.state === "CONNECTED") as boolean,
       };
     });
+    
+    console.log('[CAMERAS] Returning', simplified.length, 'cameras:', simplified.map(c => c.name));
     return NextResponse.json(simplified);
   } catch (error: unknown) {
+    console.error('[CAMERAS] Error:', error);
     return NextResponse.json(
       { error: (error as Error)?.message ?? "Failed to fetch cameras" },
       { status: 500 }

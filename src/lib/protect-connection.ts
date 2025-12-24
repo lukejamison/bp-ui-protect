@@ -192,29 +192,80 @@ class ProtectConnectionManager {
       
       console.log(`[PROTECT] Attempting login for ${username}...`);
       
-      // Add timeout to login operation (increased for slow NVR)
-      const loginTimeout = 45000; // 45 seconds
-      await Promise.race([
-        protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Login timeout after 45s - NVR may be slow or unreachable')), loginTimeout)
+      // According to the docs, ProtectApi emits a 'login' event with success status
+      // The returned boolean from login() might not be reliable with network issues
+      let loginEventReceived = false;
+      let loginEventSuccess = false;
+      
+      const loginEventPromise = new Promise<boolean>((resolve) => {
+        protect.once('login', (success: boolean) => {
+          loginEventReceived = true;
+          loginEventSuccess = success;
+          console.log(`[PROTECT] Login event received: ${success ? 'success' : 'failed'}`);
+          resolve(success);
+        });
+      });
+      
+      // Start the login attempt
+      const loginPromise = protect.login(String(baseUrl).replace(/^https?:\/\//, ""), username, password);
+      
+      // Wait for either the login method to complete or the event to fire (whichever comes first)
+      const loginSuccess = await Promise.race([
+        loginPromise,
+        loginEventPromise,
+        new Promise<boolean>((_, reject) => 
+          setTimeout(() => reject(new Error('Login timeout after 60s')), 60000)
         )
-      ]);
+      ]).catch((error) => {
+        console.error(`[PROTECT] Login error:`, error instanceof Error ? error.message : error);
+        return false;
+      });
+      
+      // Give a moment for the event to fire if it hasn't yet
+      if (!loginEventReceived) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      
+      // Use the event result if available, otherwise use the return value
+      const finalLoginSuccess = loginEventReceived ? loginEventSuccess : loginSuccess;
+      
+      if (!finalLoginSuccess) {
+        throw new Error('Login failed - check credentials, network connectivity, and ensure UNVR is accessible');
+      }
       
       console.log(`[PROTECT] Login successful, getting bootstrap...`);
       
-      // Add timeout to bootstrap fetch (increased for slow NVR)
-      const bootstrapTimeout = 45000; // 45 seconds
-      await Promise.race([
+      // According to the official docs, getBootstrap() returns a boolean
+      // The bootstrap data is then available on protect.bootstrap (event-driven)
+      const bootstrapSuccess = await Promise.race([
         protect.getBootstrap(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Bootstrap fetch timeout after 45s - Check NVR performance')), bootstrapTimeout)
+        new Promise<boolean>((_, reject) => 
+          setTimeout(() => reject(new Error('Bootstrap timeout after 60s')), 60000)
         )
       ]);
       
-      // Cache the bootstrap data
-      if (protect.bootstrap) {
-        this.cacheBootstrap(key, protect.bootstrap);
+      console.log(`[PROTECT] getBootstrap() returned:`, bootstrapSuccess);
+      
+      if (!bootstrapSuccess) {
+        throw new Error('Bootstrap fetch failed - unable to retrieve camera data from NVR');
+      }
+      
+      // Give the library a moment to populate the bootstrap data
+      // The library uses an event-driven architecture internally
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Access bootstrap data
+      const bootstrapData = (protect as any)._bootstrap || protect.bootstrap;
+      
+      if (bootstrapData && Object.keys(bootstrapData).length > 0) {
+        // Store it as public property for easy access
+        (protect as any).bootstrap = bootstrapData;
+        this.cacheBootstrap(key, bootstrapData);
+        console.log(`[PROTECT] Bootstrap cached with ${bootstrapData.cameras?.length ?? 0} cameras`);
+      } else {
+        console.warn(`[PROTECT] Warning: Bootstrap data is empty - NVR may have no cameras configured`);
+        // Don't throw - NVR might legitimately have no cameras
+        (protect as any).bootstrap = { cameras: [], lights: [], sensors: [], chimes: [], viewers: [] };
       }
       
       console.log(`[PROTECT] Successfully connected to ${baseUrl}`);
